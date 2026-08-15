@@ -8,6 +8,8 @@ export default async function handler(req, res) {
   }
 
   const targetUrlStr = req.query.url;
+  const audioLang = req.query.audio || ""; // 'tur' veya 'eng'
+
   if (!targetUrlStr) {
     return res.status(400).send("Missing url parameter.");
   }
@@ -47,11 +49,13 @@ export default async function handler(req, res) {
 
       const basePath = targetUrl.href.substring(0, targetUrl.href.lastIndexOf("/") + 1);
 
+      // 1. Ses kanalları (URI="...")
       text = text.replace(/URI=["']([^"']+)["']/g, (match, p1) => {
         let abs = p1.startsWith("http") ? p1 : (p1.startsWith("/") ? targetUrl.origin + p1 : basePath + p1);
         return `URI="${proxyBase}${encodeURIComponent(abs)}"`;
       });
 
+      // 2. Alt playlistler ve Segmentler
       text = text.split("\n").map(line => {
         const trimmed = line.trim();
         if (trimmed && !trimmed.startsWith("#")) {
@@ -60,6 +64,20 @@ export default async function handler(req, res) {
         }
         return line;
       }).join("\n");
+
+      // 3. Eğer Altyazılı sekmesi istenmişse (audio=eng), İngilizce sesi varsayılan (DEFAULT=YES) yap!
+      if (audioLang === "eng") {
+        text = text.split("\n").map(line => {
+          if (line.startsWith("#EXT-X-MEDIA:TYPE=AUDIO")) {
+            if (line.includes('LANGUAGE="eng"') || line.includes('NAME="English"')) {
+              line = line.replace(/DEFAULT=(?:YES|NO)/, "DEFAULT=YES").replace(/AUTOSELECT=(?:YES|NO)/, "AUTOSELECT=YES");
+            } else {
+              line = line.replace(/DEFAULT=(?:YES|NO)/, "DEFAULT=NO");
+            }
+          }
+          return line;
+        }).join("\n");
+      }
 
       res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
       res.setHeader("Cache-Control", "public, max-age=86400");
