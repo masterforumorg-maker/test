@@ -7,7 +7,7 @@ export default async function handler(req, res) {
     return res.status(200).end();
   }
 
-  const targetUrlStr = req.query.url;
+  let targetUrlStr = req.query.url;
   const audioLang = req.query.audio || ""; // 'tur' veya 'eng'
 
   if (!targetUrlStr) {
@@ -15,9 +15,28 @@ export default async function handler(req, res) {
   }
 
   try {
+    const host = req.headers["x-forwarded-host"] || req.headers.host;
+    const proto = req.headers["x-forwarded-proto"] || "https";
+    const proxyBase = `${proto}://${host}/api?url=`;
+
+    // 1. Eğer VidMoly embed linki gelirse, Vercel kendi IP'sine özel taze .m3u8 akışını anında çözsün!
+    if (targetUrlStr.includes("vidmoly.net/embed-") || targetUrlStr.includes("vidmoly.to/embed-") || targetUrlStr.includes("vidmoly.me/embed-")) {
+      const embResp = await fetch(targetUrlStr, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+          "Referer": "https://sezonlukdizi.cc/"
+        }
+      });
+      const embHtml = await embResp.text();
+      const m3u8Match = embHtml.match(/(https?:\/\/[^\s'"<>]+\.m3u8[^\s'"<>]*)/i);
+      if (m3u8Match && m3u8Match[1]) {
+        targetUrlStr = m3u8Match[1];
+      }
+    }
+
     const targetUrl = new URL(targetUrlStr);
 
-    // Dinamik Referer ve Origin Tespiti (FilmEkseni vs VidMoly)
+    // Dinamik Referer ve Origin Tespiti
     let dynamicReferer = "https://vidmoly.net/";
     let dynamicOrigin = "https://vidmoly.net";
 
@@ -55,10 +74,6 @@ export default async function handler(req, res) {
 
     if (isM3U8 && response.ok) {
       let text = await response.text();
-      const host = req.headers["x-forwarded-host"] || req.headers.host;
-      const proto = req.headers["x-forwarded-proto"] || "https";
-      const proxyBase = `${proto}://${host}/api?url=`;
-
       const basePath = targetUrl.href.substring(0, targetUrl.href.lastIndexOf("/") + 1);
 
       // 1. Ses kanalları (URI="...")
