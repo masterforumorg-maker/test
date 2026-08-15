@@ -17,19 +17,31 @@ export default async function handler(req, res) {
   try {
     const targetUrl = new URL(targetUrlStr);
 
-    const pathParts = targetUrl.pathname.split("/");
-    let fileId = "";
-    const encodeIdx = pathParts.indexOf("encode");
-    if (encodeIdx !== -1 && pathParts[encodeIdx + 1]) {
-      fileId = pathParts[encodeIdx + 1];
+    // Dinamik Referer ve Origin Tespiti (FilmEkseni vs VidMoly)
+    let dynamicReferer = "https://vidmoly.net/";
+    let dynamicOrigin = "https://vidmoly.net";
+
+    if (targetUrl.hostname.includes("vidload.top") || targetUrl.hostname.includes("eksenload.top")) {
+      const pathParts = targetUrl.pathname.split("/");
+      let fileId = "";
+      const encodeIdx = pathParts.indexOf("encode");
+      if (encodeIdx !== -1 && pathParts[encodeIdx + 1]) {
+        fileId = pathParts[encodeIdx + 1];
+      }
+      dynamicReferer = fileId ? `https://eksenload.top/eplayer/${fileId}` : "https://eksenload.top/";
+      dynamicOrigin = "https://eksenload.top";
+    } else if (targetUrl.hostname.includes("vmeas.cloud") || targetUrl.hostname.includes("vidmoly")) {
+      dynamicReferer = "https://vidmoly.net/";
+      dynamicOrigin = "https://vidmoly.net";
+    } else {
+      dynamicReferer = `${targetUrl.protocol}//${targetUrl.hostname}/`;
+      dynamicOrigin = `${targetUrl.protocol}//${targetUrl.hostname}`;
     }
 
-    const dynamicReferer = fileId ? `https://eksenload.top/eplayer/${fileId}` : "https://eksenload.top/";
-
     const fetchHeaders = {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
       "Referer": dynamicReferer,
-      "Origin": "https://eksenload.top",
+      "Origin": dynamicOrigin,
       "Accept": "*/*",
       "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
     };
