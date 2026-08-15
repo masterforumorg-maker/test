@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 
-// Bellek içi token önbelleği (Anlık 0ms başlatma sağlar)
+// Bellek içi token önbelleği (Tekrar tekrar istek atıp beklemeyi önler)
 const tokenCache = new Map();
 
 export default async function handler(req, res) {
@@ -25,7 +25,7 @@ export default async function handler(req, res) {
     const proto = req.headers["x-forwarded-proto"] || "https";
     const proxyBase = `${proto}://${host}/api?url=`;
 
-    // 1. VidMoly embed linki geldiyse hızlı önbellekten al veya çöz
+    // 1. VidMoly embed linki geldiyse hızlı önbellekten al veya taze m3u8 çöz
     if (targetUrlStr.includes("vidmoly.net/embed-") || targetUrlStr.includes("vidmoly.to/embed-") || targetUrlStr.includes("vidmoly.me/embed-")) {
       const now = Date.now();
       const cached = tokenCache.get(targetUrlStr);
@@ -39,18 +39,20 @@ export default async function handler(req, res) {
             "Referer": "https://sezonlukdizi.cc/"
           }
         });
-        const embHtml = await embResp.text();
-        const m3u8Match = embHtml.match(/(https?:\/\/[^\s'"<>]+\.m3u8[^\s'"<>]*)/i);
-        if (m3u8Match && m3u8Match[1]) {
-          targetUrlStr = m3u8Match[1];
-          tokenCache.set(req.query.url, { m3u8: targetUrlStr, time: now });
+        if (embResp.ok) {
+          const embHtml = await embResp.text();
+          const m3u8Match = embHtml.match(/(https?:\/\/[^\s'"<>]+\.m3u8[^\s'"<>]*)/i);
+          if (m3u8Match && m3u8Match[1]) {
+            targetUrlStr = m3u8Match[1];
+            tokenCache.set(req.query.url, { m3u8: targetUrlStr, time: now });
+          }
         }
       }
     }
 
     const targetUrl = new URL(targetUrlStr);
 
-    // Dinamik Referer ve Origin Tespiti
+    // 2. FilmEkseni & VidMoly Dinamik Referer ve Origin Tespiti
     let dynamicReferer = "https://vidmoly.net/";
     let dynamicOrigin = "https://vidmoly.net";
 
@@ -66,6 +68,9 @@ export default async function handler(req, res) {
     } else if (targetUrl.hostname.includes("vmeas.cloud") || targetUrl.hostname.includes("vidmoly")) {
       dynamicReferer = "https://vidmoly.net/";
       dynamicOrigin = "https://vidmoly.net";
+    } else if (targetUrl.hostname.includes("sibnet")) {
+      dynamicReferer = "https://video.sibnet.ru/";
+      dynamicOrigin = "https://video.sibnet.ru";
     } else {
       dynamicReferer = `${targetUrl.protocol}//${targetUrl.hostname}/`;
       dynamicOrigin = `${targetUrl.protocol}//${targetUrl.hostname}`;
@@ -94,13 +99,13 @@ export default async function handler(req, res) {
       let text = await response.text();
       const basePath = targetUrl.href.substring(0, targetUrl.href.lastIndexOf("/") + 1);
 
-      // 1. Ses kanalları (URI="...")
+      // Ses kanalları (URI="...")
       text = text.replace(/URI=["']([^"']+)["']/g, (match, p1) => {
         let abs = p1.startsWith("http") ? p1 : (p1.startsWith("/") ? targetUrl.origin + p1 : basePath + p1);
         return `URI="${proxyBase}${encodeURIComponent(abs)}"`;
       });
 
-      // 2. Alt playlistler ve Segmentler
+      // Alt playlistler ve Segmentler
       text = text.split("\n").map(line => {
         const trimmed = line.trim();
         if (trimmed && !trimmed.startsWith("#")) {
@@ -110,7 +115,7 @@ export default async function handler(req, res) {
         return line;
       }).join("\n");
 
-      // 3. Eğer Altyazılı sekmesi istenmişse (audio=eng), İngilizce sesi varsayılan (DEFAULT=YES) yap!
+      // Eğer Altyazılı sekmesi istenmişse (audio=eng), İngilizce sesi varsayılan yap (FilmEkseni)
       if (audioLang === "eng") {
         text = text.split("\n").map(line => {
           if (line.startsWith("#EXT-X-MEDIA:TYPE=AUDIO")) {
@@ -129,7 +134,7 @@ export default async function handler(req, res) {
       return res.status(200).send(text);
     }
 
-    // Video Segmentleri (.ts ve .mp4) için Yüksek Hızlı Doğrudan Akış (Stream Pipe)
+    // Video Segmentleri (.ts ve .mp4) için Yüksek Hızlı Akış Borusu (Stream Pipe)
     res.setHeader("Content-Type", response.headers.get("content-type") || "video/mp2t");
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
 
