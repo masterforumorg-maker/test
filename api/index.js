@@ -1,7 +1,13 @@
+import { Readable } from "node:stream";
+
+// Bellek içi token önbelleği (Anlık 0ms başlatma sağlar)
+const tokenCache = new Map();
+
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "*");
+  res.setHeader("Accept-Ranges", "bytes");
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
@@ -19,18 +25,26 @@ export default async function handler(req, res) {
     const proto = req.headers["x-forwarded-proto"] || "https";
     const proxyBase = `${proto}://${host}/api?url=`;
 
-    // 1. Eğer VidMoly embed linki gelirse, Vercel kendi IP'sine özel taze .m3u8 akışını anında çözsün!
+    // 1. VidMoly embed linki geldiyse hızlı önbellekten al veya çöz
     if (targetUrlStr.includes("vidmoly.net/embed-") || targetUrlStr.includes("vidmoly.to/embed-") || targetUrlStr.includes("vidmoly.me/embed-")) {
-      const embResp = await fetch(targetUrlStr, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-          "Referer": "https://sezonlukdizi.cc/"
+      const now = Date.now();
+      const cached = tokenCache.get(targetUrlStr);
+
+      if (cached && (now - cached.time < 30 * 60 * 1000)) {
+        targetUrlStr = cached.m3u8;
+      } else {
+        const embResp = await fetch(targetUrlStr, {
+          headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Referer": "https://sezonlukdizi.cc/"
+          }
+        });
+        const embHtml = await embResp.text();
+        const m3u8Match = embHtml.match(/(https?:\/\/[^\s'"<>]+\.m3u8[^\s'"<>]*)/i);
+        if (m3u8Match && m3u8Match[1]) {
+          targetUrlStr = m3u8Match[1];
+          tokenCache.set(req.query.url, { m3u8: targetUrlStr, time: now });
         }
-      });
-      const embHtml = await embResp.text();
-      const m3u8Match = embHtml.match(/(https?:\/\/[^\s'"<>]+\.m3u8[^\s'"<>]*)/i);
-      if (m3u8Match && m3u8Match[1]) {
-        targetUrlStr = m3u8Match[1];
       }
     }
 
@@ -64,6 +78,10 @@ export default async function handler(req, res) {
       "Accept": "*/*",
       "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
     };
+
+    if (req.headers.range) {
+      fetchHeaders["Range"] = req.headers.range;
+    }
 
     const response = await fetch(targetUrl.href, {
       headers: fetchHeaders,
@@ -111,11 +129,26 @@ export default async function handler(req, res) {
       return res.status(200).send(text);
     }
 
+    // Video Segmentleri (.ts ve .mp4) için Yüksek Hızlı Doğrudan Akış (Stream Pipe)
     res.setHeader("Content-Type", response.headers.get("content-type") || "video/mp2t");
-    res.setHeader("Cache-Control", "public, max-age=86400");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
 
-    const arrayBuffer = await response.arrayBuffer();
-    return res.status(response.status).send(Buffer.from(arrayBuffer));
+    if (response.headers.get("content-range")) {
+      res.setHeader("Content-Range", response.headers.get("content-range"));
+    }
+    if (response.headers.get("content-length")) {
+      res.setHeader("Content-Length", response.headers.get("content-length"));
+    }
+
+    res.status(response.status);
+
+    if (response.body) {
+      const nodeStream = Readable.fromWeb(response.body);
+      return nodeStream.pipe(res);
+    } else {
+      const arrayBuffer = await response.arrayBuffer();
+      return res.send(Buffer.from(arrayBuffer));
+    }
 
   } catch (error) {
     return res.status(500).send("Proxy Error: " + error.message);
